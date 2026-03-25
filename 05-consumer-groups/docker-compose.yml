@@ -1,0 +1,137 @@
+services:
+  # ==========================================================================
+  # Kafka (KRaft 모드 — Zookeeper 없이 단독 실행)
+  # ==========================================================================
+  kafka:
+    image: apache/kafka:latest
+    container_name: kafka-05
+    ports:
+      - "29092:29092"     # 호스트에서 접근용
+    environment:
+      # KRaft 모드 설정
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+      # 리스너 설정
+      KAFKA_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_HOST://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      # ── "orders" 토픽 자동 생성 시 기본 파티션 수 ──
+      KAFKA_NUM_PARTITIONS: 3
+
+      # 단일 브로커이므로 replication-factor=1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    healthcheck:
+      # Kafka가 준비되었는지 확인
+      test: /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1
+      interval: 5s
+      timeout: 10s
+      retries: 10
+
+  # ==========================================================================
+  # 토픽 초기화 — "orders" 토픽을 3개 파티션으로 생성
+  # ==========================================================================
+  kafka-init:
+    image: apache/kafka:latest
+    container_name: kafka-init-05
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo ">>> orders 토픽 생성 (파티션 3개)..."
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+          --create --if-not-exists \
+          --topic orders \
+          --partitions 3 \
+          --replication-factor 1
+        echo ">>> 토픽 생성 완료!"
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe --topic orders
+
+  # ==========================================================================
+  # Kafka UI — 브라우저에서 토픽, 메시지, Consumer Group 확인
+  # ==========================================================================
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui-05
+    ports:
+      - "8080:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # ==========================================================================
+  # Producer (포트 8000)
+  # ==========================================================================
+  producer:
+    build: ./producer
+    container_name: producer-05
+    ports:
+      - "8000:8000"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC=orders
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
+  # ==========================================================================
+  # Consumer 1 (포트 8001)
+  # ==========================================================================
+  consumer-1:
+    build: ./consumer
+    container_name: consumer-1-05
+    ports:
+      - "8001:8000"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC=orders
+      - KAFKA_GROUP_ID=order-group
+      - CONSUMER_ID=consumer-1
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
+  # ==========================================================================
+  # Consumer 2 (포트 8002)
+  # ==========================================================================
+  consumer-2:
+    build: ./consumer
+    container_name: consumer-2-05
+    ports:
+      - "8002:8000"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC=orders
+      - KAFKA_GROUP_ID=order-group
+      - CONSUMER_ID=consumer-2
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
+  # ==========================================================================
+  # Consumer 3 (포트 8003)
+  # ==========================================================================
+  consumer-3:
+    build: ./consumer
+    container_name: consumer-3-05
+    ports:
+      - "8003:8000"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC=orders
+      - KAFKA_GROUP_ID=order-group
+      - CONSUMER_ID=consumer-3
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
