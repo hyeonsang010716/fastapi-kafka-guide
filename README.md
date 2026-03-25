@@ -55,20 +55,20 @@
 
 | 챕터 | 주제 | 핵심 내용 |
 |------|------|-----------|
-| [09-real-world-order-system](./09-real-world-order-system/) | 주문 처리 시스템 | 이벤트 드리븐 아키텍처, Saga 패턴, 보상 트랜잭션 |
+| [09-saga-pattern-order-system](./09-saga-pattern-order-system/) | 주문 처리 시스템 | 이벤트 드리븐 아키텍처, Saga 패턴, 보상 트랜잭션 |
 | [10-monitoring-and-testing](./10-monitoring-and-testing/) | 모니터링과 테스트 | Consumer Lag, 헬스체크, testcontainers 통합 테스트 |
 | [11-multi-service-architecture](./11-multi-service-architecture/) | 마이크로서비스 아키텍처 | API Gateway, 알림 서비스, CQRS 패턴, 3-broker 클러스터 |
 
 ## 학습 로드맵
 
 ```
-Phase 1: 기초                Phase 2: 핵심              Phase 3: 안정성          Phase 4: 실전
+   Phase 1: 기초             Phase 2: 핵심            Phase 3: 안정성          Phase 4: 실전
 ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
 │ 00 환경 설정       │    │ 04 토픽과 파티션     │    │ 07 에러 처리/DLQ   │    │ 09 주문 시스템      │
 │        ↓         │    │        ↓         │    │        ↓         │    │        ↓         │
 │ 01 Kafka 개념     │ →  │ 05 컨슈머 그룹      │ →  │ 08 멱등성/중복방지   │ →  │ 10 모니터링/테스트   │
 │        ↓         │    │        ↓         │    │                  │    │        ↓         │
-│ 02 Producer      │    │ 06 메시지 직렬화    │    │                  │     │ 11 마이크로서비스   │
+│ 02 Producer      │    │ 06 메시지 직렬화    │    │                  │    │  11 마이크로서비스   │
 │        ↓         │    │                  │    │                  │    │                  │
 │ 03 Consumer      │    │                  │    │                  │    │                  │
 └──────────────────┘    └──────────────────┘    └──────────────────┘    └──────────────────┘
