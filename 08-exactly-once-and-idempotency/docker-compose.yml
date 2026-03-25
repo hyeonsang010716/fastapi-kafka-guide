@@ -1,0 +1,76 @@
+version: "3.8"
+
+services:
+  # ──────────────────────────────────────────────
+  # Kafka (KRaft 모드 - Zookeeper 없이 단독 실행)
+  # ──────────────────────────────────────────────
+  kafka:
+    image: apache/kafka:latest
+    container_name: kafka
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_HOST://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    healthcheck:
+      # Kafka가 준비되었는지 확인
+      test: /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1
+      interval: 5s
+      timeout: 10s
+      retries: 10
+
+  # ──────────────────────────────────────────────
+  # Kafka UI - 메시지 및 토픽 모니터링
+  # ──────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui-08
+    ports:
+      - "8080:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # ──────────────────────────────────────────────
+  # Redis - 멱등성 키 저장소
+  # ──────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: redis-08
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ──────────────────────────────────────────────
+  # FastAPI 애플리케이션
+  # ──────────────────────────────────────────────
+  app:
+    build: .
+    container_name: app-08
+    ports:
+      - "8000:8000"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - REDIS_URL=redis://redis:6379/0
+      - TOPIC_NAME=point-events
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
