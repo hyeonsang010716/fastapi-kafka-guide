@@ -1,0 +1,244 @@
+###############################################################################
+# Chapter 11: 멀티 서비스 아키텍처 - Docker Compose
+#
+# 구성 요소:
+#   - 3-broker Kafka 클러스터 (KRaft 모드, apache/kafka 공식 이미지)
+#   - Kafka UI (웹 기반 클러스터 관리 도구)
+#   - 6개의 FastAPI 마이크로서비스
+#
+# 실행: docker compose up --build
+# 중지: docker compose down -v
+###############################################################################
+
+services:
+
+  # ════════════════════════════════════════════════
+  # Kafka 3-Broker 클러스터 (KRaft 모드, apache/kafka 공식 이미지)
+  # ════════════════════════════════════════════════
+
+  # kafka-0: 컨트롤러 + 브로커 (노드 0)
+  # KRaft 모드에서 컨트롤러는 메타데이터 관리를 담당 (Zookeeper 대체)
+  kafka-0:
+    image: apache/kafka:latest
+    container_name: kafka-0
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 0
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_HOST://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-0:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 0@kafka-0:9093
+      # 토픽 기본 설정 (3-broker에 맞게 replication factor 설정)
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - kafka-net
+    healthcheck:
+      test: /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1
+      interval: 5s
+      timeout: 10s
+      retries: 10
+
+  # kafka-1: 브로커 전용 (노드 1)
+  kafka-1:
+    image: apache/kafka:latest
+    container_name: kafka-1
+    ports:
+      - "29093:29093"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker
+      KAFKA_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_HOST://:29093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:9092,PLAINTEXT_HOST://localhost:29093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 0@kafka-0:9093
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - kafka-net
+    depends_on:
+      kafka-0:
+        condition: service_healthy
+
+  # kafka-2: 브로커 전용 (노드 2)
+  kafka-2:
+    image: apache/kafka:latest
+    container_name: kafka-2
+    ports:
+      - "29094:29094"
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: broker
+      KAFKA_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_HOST://:29094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:9092,PLAINTEXT_HOST://localhost:29094
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 0@kafka-0:9093
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - kafka-net
+    depends_on:
+      kafka-0:
+        condition: service_healthy
+
+  # ════════════════════════════════════════════════
+  # Kafka UI - 웹 기반 Kafka 클러스터 관리 도구
+  # ════════════════════════════════════════════════
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=ch11-cluster
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka-0:9092,kafka-1:9092,kafka-2:9092
+    depends_on:
+      kafka-0:
+        condition: service_healthy
+    networks:
+      - kafka-net
+
+  # ════════════════════════════════════════════════
+  # FastAPI 마이크로서비스 (6개)
+  # ════════════════════════════════════════════════
+
+  # API Gateway (포트 8000) - 단일 진입점
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    container_name: gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - ORDER_SERVICE_URL=http://order-service:8001
+      - PAYMENT_SERVICE_URL=http://payment-service:8002
+      - INVENTORY_SERVICE_URL=http://inventory-service:8003
+      - NOTIFICATION_SERVICE_URL=http://notification-service:8004
+      - QUERY_SERVICE_URL=http://query-service:8005
+      - SERVICE_PORT=8000
+    depends_on:
+      - order-service
+      - payment-service
+      - inventory-service
+      - notification-service
+      - query-service
+    networks:
+      - kafka-net
+
+  # 주문 서비스 (포트 8001)
+  order-service:
+    build:
+      context: .
+      dockerfile: order-service/Dockerfile
+    container_name: order-service
+    ports:
+      - "8001:8001"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka-0:9092,kafka-1:9092,kafka-2:9092
+      - SERVICE_PORT=8001
+    depends_on:
+      kafka-0:
+        condition: service_healthy
+    networks:
+      - kafka-net
+
+  # 결제 서비스 (포트 8002)
+  payment-service:
+    build:
+      context: .
+      dockerfile: payment-service/Dockerfile
+    container_name: payment-service
+    ports:
+      - "8002:8002"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka-0:9092,kafka-1:9092,kafka-2:9092
+      - SERVICE_PORT=8002
+      - PAYMENT_FAILURE_RATE=0.2
+    depends_on:
+      kafka-0:
+        condition: service_healthy
+    networks:
+      - kafka-net
+
+  # 재고 서비스 (포트 8003)
+  inventory-service:
+    build:
+      context: .
+      dockerfile: inventory-service/Dockerfile
+    container_name: inventory-service
+    ports:
+      - "8003:8003"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka-0:9092,kafka-1:9092,kafka-2:9092
+      - SERVICE_PORT=8003
+      - INVENTORY_FAILURE_RATE=0.15
+    depends_on:
+      kafka-0:
+        condition: service_healthy
+    networks:
+      - kafka-net
+
+  # 알림 서비스 (포트 8004)
+  notification-service:
+    build:
+      context: .
+      dockerfile: notification-service/Dockerfile
+    container_name: notification-service
+    ports:
+      - "8004:8004"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka-0:9092,kafka-1:9092,kafka-2:9092
+      - SERVICE_PORT=8004
+    depends_on:
+      kafka-0:
+        condition: service_healthy
+    networks:
+      - kafka-net
+
+  # 쿼리 서비스 (포트 8005) - CQRS 읽기 모델
+  query-service:
+    build:
+      context: .
+      dockerfile: query-service/Dockerfile
+    container_name: query-service
+    ports:
+      - "8005:8005"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka-0:9092,kafka-1:9092,kafka-2:9092
+      - SERVICE_PORT=8005
+    depends_on:
+      kafka-0:
+        condition: service_healthy
+    networks:
+      - kafka-net
+
+# ════════════════════════════════════════════════
+# 네트워크 및 볼륨
+# ════════════════════════════════════════════════
+networks:
+  kafka-net:
+    driver: bridge
