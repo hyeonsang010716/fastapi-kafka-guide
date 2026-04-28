@@ -58,6 +58,7 @@
 | [09-saga-pattern-order-system](./09-saga-pattern-order-system/) | 주문 처리 시스템 | 이벤트 드리븐 아키텍처, Saga 패턴, 보상 트랜잭션 |
 | [10-monitoring-and-testing](./10-monitoring-and-testing/) | 모니터링과 테스트 | Consumer Lag, 헬스체크, testcontainers 통합 테스트 |
 | [11-multi-service-architecture](./11-multi-service-architecture/) | 마이크로서비스 아키텍처 | API Gateway, 알림 서비스, CQRS 패턴, 3-broker 클러스터 |
+| [12-outbox-pattern](./12-outbox-pattern/) | Transactional Outbox | DB ↔ Kafka 일관성, 폴링 릴레이(`FOR UPDATE SKIP LOCKED`), `event_id` 기반 멱등 컨슈머 |
 
 ## 학습 로드맵
 
@@ -69,8 +70,8 @@
 │ 01 Kafka 개념     │ →  │ 05 컨슈머 그룹      │ →  │ 08 멱등성/중복방지   │ →  │ 10 모니터링/테스트   │
 │        ↓         │    │        ↓         │    │                  │    │        ↓         │
 │ 02 Producer      │    │ 06 메시지 직렬화    │    │                  │    │  11 마이크로서비스   │
-│        ↓         │    │                  │    │                  │    │                  │
-│ 03 Consumer      │    │                  │    │                  │    │                  │
+│        ↓         │    │                  │    │                  │    │        ↓         │
+│ 03 Consumer      │    │                  │    │                  │    │  12 Outbox 패턴    │
 └──────────────────┘    └──────────────────┘    └──────────────────┘    └──────────────────┘
 ```
 
@@ -348,6 +349,47 @@ Kafka 시스템의 **모니터링, 헬스체크, 통합 테스트**를 구현합
 - 3-broker 클러스터 구성
 - 프로덕션 체크리스트
 
+---
+
+### 12 - Transactional Outbox 패턴
+
+DB 쓰기와 Kafka 발행을 하나의 트랜잭션으로 묶는 **dual-write 문제**를 푸는 가장 실무적인 방법인 **Outbox 패턴**을 구현합니다.
+
+```
+POST /orders
+     │
+     ▼
+┌─────────────────────────────────────┐
+│  단일 DB 트랜잭션                       │
+│   INSERT INTO orders                 │
+│   INSERT INTO outbox                 │
+│   COMMIT                             │
+└──────────────┬──────────────────────┘
+               │
+               ▼
+        ┌──────────────┐    poll (FOR UPDATE SKIP LOCKED)
+        │  PostgreSQL  │ ◀─────────────┐
+        │  outbox      │               │
+        └──────────────┘     ┌─────────┴─────────┐
+                             │  Outbox Relay     │
+                             │  (백그라운드 폴러)    │
+                             └─────────┬─────────┘
+                                       ▼
+                                   ┌───────┐
+                                   │ Kafka │
+                                   └───┬───┘
+                                       ▼
+                              event_id 기반 멱등 컨슈머
+```
+
+**배우는 것:**
+- Dual-write 문제와 왜 try/except, 2PC, Kafka Transactions가 답이 아닌가
+- `orders` + `outbox` 테이블을 같은 DB 트랜잭션으로 묶기
+- 폴링 릴레이 패턴 (`SELECT ... FOR UPDATE SKIP LOCKED`)으로 안전한 동시성
+- `event_id`(UUID) + dedup 테이블로 At-least-once를 멱등 처리로 흡수
+- Polling Relay vs Debezium(CDC) 트레이드오프
+- Kafka가 죽어도 사용자 트랜잭션은 흔들리지 않는 장애 격리
+
 ## 패키지 의존성 요약
 
 | 패키지 | 용도 | 도입 챕터 |
@@ -360,6 +402,7 @@ Kafka 시스템의 **모니터링, 헬스체크, 통합 테스트**를 구현합
 | `structlog` | 구조화된 로깅 | 10 |
 | `pytest` + `testcontainers` | 통합 테스트 | 10 |
 | `httpx` | 비동기 HTTP 클라이언트 (테스트용) | 10 |
+| `sqlalchemy` + `asyncpg` | PostgreSQL 비동기 ORM | 12 |
 
 ## 빠른 시작
 

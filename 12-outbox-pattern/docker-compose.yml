@@ -1,0 +1,104 @@
+version: "3.8"
+
+services:
+  # =============================================================
+  # PostgreSQL - 주문 데이터 + Outbox 테이블이 함께 사는 곳
+  # =============================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: outbox-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: outbox
+      POSTGRES_PASSWORD: outbox
+      POSTGRES_DB: outbox
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U outbox -d outbox"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  # =============================================================
+  # Kafka (KRaft 모드)
+  # =============================================================
+  kafka:
+    image: apache/kafka:latest
+    container_name: outbox-kafka
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_HOST://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    healthcheck:
+      test: /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1
+      interval: 5s
+      timeout: 10s
+      retries: 10
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: outbox-kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=outbox
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # =============================================================
+  # Order API + Outbox Relay (한 컨테이너 안에서 같이 동작)
+  #   - HTTP 요청 처리: 트랜잭션 안에서 orders + outbox 동시 INSERT
+  #   - 백그라운드 태스크(Relay): outbox 폴링 → Kafka 발행 → published_at 마킹
+  # =============================================================
+  order-service:
+    build:
+      context: .
+    container_name: outbox-order-service
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://outbox:outbox@postgres:5432/outbox
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - RELAY_ENABLED=true
+      - RELAY_BATCH_SIZE=100
+      - RELAY_POLL_INTERVAL_MS=200
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: on-failure
+
+  # =============================================================
+  # 샘플 다운스트림 컨슈머 (멱등 처리 시연용)
+  #   - order.events 토픽을 구독
+  #   - event_id 기반으로 중복 메시지를 무시
+  # =============================================================
+  consumer:
+    build:
+      context: .
+    container_name: outbox-consumer
+    command: ["python", "-m", "app.consumer"]
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - DATABASE_URL=postgresql+asyncpg://outbox:outbox@postgres:5432/outbox
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: on-failure
