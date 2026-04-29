@@ -1,0 +1,44 @@
+version: "3.8"
+
+# =============================================================
+# 두 서비스만 띄운다.
+#  - gateway : 흉내낸 외부 결제 게이트웨이 (모드를 환경변수로 바꿈)
+#  - client  : gateway 를 호출하는 우리 결제 서비스 (resilience 패턴 적용)
+# =============================================================
+
+services:
+
+  gateway:
+    build:
+      context: .
+    container_name: resilience-gateway
+    command: ["uvicorn", "app.gateway_main:app", "--host", "0.0.0.0", "--port", "9000"]
+    ports:
+      - "9000:9000"
+    environment:
+      # HEALTHY | SLOW | DEAD | FLAKY
+      - GATEWAY_MODE=HEALTHY
+      - GATEWAY_LATENCY_MS=50
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9000/health', timeout=2)\""]
+      interval: 3s
+      timeout: 5s
+      retries: 5
+
+  client:
+    build:
+      context: .
+    container_name: resilience-client
+    ports:
+      - "8000:8000"
+    environment:
+      - GATEWAY_URL=http://gateway:9000
+      - REQUEST_TIMEOUT_SEC=2.0
+      - RETRY_MAX_ATTEMPTS=3
+      - RETRY_BASE_DELAY_MS=200
+      - CB_FAILURE_THRESHOLD=5
+      - CB_RECOVERY_TIMEOUT_SEC=10
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: on-failure

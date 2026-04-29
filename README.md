@@ -59,6 +59,7 @@
 | [10-monitoring-and-testing](./10-monitoring-and-testing/) | 모니터링과 테스트 | Consumer Lag, 헬스체크, testcontainers 통합 테스트 |
 | [11-multi-service-architecture](./11-multi-service-architecture/) | 마이크로서비스 아키텍처 | API Gateway, 알림 서비스, CQRS 패턴, 3-broker 클러스터 |
 | [12-outbox-pattern](./12-outbox-pattern/) | Transactional Outbox | DB ↔ Kafka 일관성, 폴링 릴레이(`FOR UPDATE SKIP LOCKED`), `event_id` 기반 멱등 컨슈머 |
+| [13-resilience-patterns](./13-resilience-patterns/) | Resilience 패턴 | Timeout, Retry+Backoff, **Circuit Breaker**, Bulkhead — cascading failure 차단 |
 
 ## 학습 로드맵
 
@@ -72,6 +73,8 @@
 │ 02 Producer      │    │ 06 메시지 직렬화    │    │                  │    │  11 마이크로서비스   │
 │        ↓         │    │                  │    │                  │    │        ↓         │
 │ 03 Consumer      │    │                  │    │                  │    │  12 Outbox 패턴    │
+│                  │    │                  │    │                  │    │        ↓         │
+│                  │    │                  │    │                  │    │ 13 Resilience    │
 └──────────────────┘    └──────────────────┘    └──────────────────┘    └──────────────────┘
 ```
 
@@ -387,8 +390,39 @@ POST /orders
 - `orders` + `outbox` 테이블을 같은 DB 트랜잭션으로 묶기
 - 폴링 릴레이 패턴 (`SELECT ... FOR UPDATE SKIP LOCKED`)으로 안전한 동시성
 - `event_id`(UUID) + dedup 테이블로 At-least-once를 멱등 처리로 흡수
+- **Inbox 패턴**: 컨슈머 측 dual-write 도 같은 트랜잭션으로 묶기 (Outbox 의 짝꿍)
 - Polling Relay vs Debezium(CDC) 트레이드오프
 - Kafka가 죽어도 사용자 트랜잭션은 흔들리지 않는 장애 격리
+
+---
+
+### 13 - Resilience Patterns
+
+외부 의존이 죽었을 때 우리 시스템 *전체* 가 같이 무너지지 않게 하는 **Resilience 패턴 4종** 을 직접 구현합니다.
+
+```
+[POST /payments]
+     │
+     ▼
+   retry + backoff      ← 일시적 흔들림을 흡수
+     │
+     ▼
+   circuit breaker      ← 죽은 게이트웨이로의 호출을 즉시 차단
+     │  (CLOSED → OPEN → HALF_OPEN → CLOSED)
+     ▼
+   timeout              ← 응답 없는 호출을 빨리 끊음
+     │
+     ▼
+   외부 결제 게이트웨이
+   (HEALTHY / SLOW / DEAD / FLAKY 모드를 흉내내는 mock)
+```
+
+**배우는 것:**
+- "Resilience" 라는 우산 용어와 그 안에 자리잡은 패턴들의 지도
+- **Cascading failure(연쇄 장애)** 가 어떻게 시스템 전체를 죽이는가 + 왜 retry 만으론 못 막는가
+- **Circuit Breaker** 직접 구현 (CLOSED / OPEN / HALF_OPEN 상태 머신)
+- Timeout / Retry / Circuit Breaker 를 어떤 *순서* 로 쌓아야 하는가
+- 모드 변경이 가능한 mock 게이트웨이로 회로 동작을 두 눈으로 확인
 
 ## 패키지 의존성 요약
 
@@ -403,6 +437,7 @@ POST /orders
 | `pytest` + `testcontainers` | 통합 테스트 | 10 |
 | `httpx` | 비동기 HTTP 클라이언트 (테스트용) | 10 |
 | `sqlalchemy` + `asyncpg` | PostgreSQL 비동기 ORM | 12 |
+| `httpx` | 외부 HTTP 호출 (resilience 시연) | 13 |
 
 ## 빠른 시작
 
